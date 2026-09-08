@@ -1,3 +1,6 @@
+st.write("Is Model Loaded?:", model is not None)
+st.write("Is Scaler Loaded?:", scaler is not None)
+
 import streamlit as st
 import pandas as pd
 import numpy as np
