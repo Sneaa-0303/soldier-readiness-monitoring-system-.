@@ -1,5 +1,3 @@
-st.write("Is Model Loaded?:", model is not None)
-st.write("Is Scaler Loaded?:", scaler is not None)
 
 import streamlit as st
 import pandas as pd
@@ -96,7 +94,9 @@ def get_user_logs(badge_id):
     df = pd.read_sql_query("SELECT timestamp, heart_rate, spo2, body_temp, sleep_hours, readiness_score, status FROM health_logs WHERE badge_id = ? ORDER BY id DESC", conn, params=(badge_id,))
     conn.close()
     return df
-
+# --- DEBUG CHECK ---
+st.write("Is Model Loaded?:", model is not None)
+st.write("Is Scaler Loaded?:", scaler is not None)
 # =============================================================================
 # 2. PAGE CONFIGURATION
 # =============================================================================
