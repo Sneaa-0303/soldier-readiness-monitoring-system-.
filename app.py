@@ -5,9 +5,15 @@ import joblib
 import cv2
 import folium
 from streamlit_folium import st_folium
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import sqlite3
 import hashlib
+
+# Define IST Timezone (UTC + 5:30)
+IST = timezone(timedelta(hours=5, minutes=30))
+
+def get_ist_now_str():
+    return datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
 
 # =============================================================================
 # 1. DATABASE INITIALIZATION (SQLite)
@@ -78,7 +84,7 @@ def log_health_data(badge_id, hr, spo2, temp, sleep, score, status):
     c.execute('''
         INSERT INTO health_logs (badge_id, timestamp, heart_rate, spo2, body_temp, sleep_hours, readiness_score, status)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (badge_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), hr, spo2, temp, sleep, score, status))
+    ''', (badge_id, get_ist_now_str(), hr, spo2, temp, sleep, score, status))
     conn.commit()
     conn.close()
 
@@ -227,7 +233,7 @@ st.title("Soldier Readiness Evaluation Portal")
 st.caption(f"Personnel: {user['full_name']} ({badge_id}) | Unit: {user['unit']}")
 st.markdown("---")
 
-tab1, tab2, tab3 = st.tabs(["🧪 Take Readiness Test", "MAP Sector Location", "📜 Medical Log History"])
+tab1, tab2, tab3 = st.tabs(["🧪 Take Readiness Test", "📍 Tactical Sector Location", "📜 Medical Log History"])
 
 # --- TAB 1: SUBMISSION FORM & RESULTS ---
 with tab1:
@@ -237,11 +243,11 @@ with tab1:
     
     with col_vitals:
         st.markdown("#### Biometric Telemetry Inputs")
-        heart_rate = st.slider("Heart Rate (BPM)", 50, 150, 105)
-        body_temp = st.slider("Body Temperature (°C)", 35.0, 40.0, 38.0, step=0.1)
-        spo2 = st.slider("Blood Oxygen (SpO2 %)", 80, 100, 93)
-        sleep_hours = st.slider("Rest Duration (Last 24h)", 0, 10, 4)
-        active_hours = st.slider("Active Duty Duration (hrs)", 1, 18, 10)
+        heart_rate = st.slider("Heart Rate (BPM)", 50, 150, 105, key="hr_slider")
+        body_temp = st.slider("Body Temperature (°C)", 35.0, 40.0, 38.0, step=0.1, key="temp_slider")
+        spo2 = st.slider("Blood Oxygen (SpO2 %)", 80, 100, 93, key="spo2_slider")
+        sleep_hours = st.slider("Rest Duration (Last 24h)", 0, 10, 4, key="sleep_slider")
+        active_hours = st.slider("Active Duty Duration (hrs)", 1, 18, 10, key="active_slider")
 
     with col_optical:
         st.markdown("#### Facial Inspection & Voice Check")
@@ -249,11 +255,11 @@ with tab1:
         captured_img = None
         
         if cam_toggle:
-            captured_img = st.camera_input("Capture Personnel Verification Image")
+            captured_img = st.camera_input("Capture Personnel Verification Image", key="camera_input")
             
         st.markdown("---")
         st.caption("🎙️ Voice Analysis (Optional Check)")
-        audio_file = st.file_uploader("Upload Voice Telemetry Log (WAV/MP3)", type=["wav", "mp3"])
+        audio_file = st.file_uploader("Upload Voice Telemetry Log (WAV/MP3)", type=["wav", "mp3"], key="audio_input")
         if audio_file is not None:
             st.audio(audio_file)
 
@@ -261,6 +267,9 @@ with tab1:
     
     # --- SUBMIT BUTTON ---
     if st.button("🚀 SUBMIT READINESS ASSESSMENT TEST", type="primary", use_container_width=True):
+        # Clear prior results to force re-evaluation
+        st.session_state.test_results = None
+        
         # Calculate Features
         sleep_deficit = active_hours / (sleep_hours + 0.1)
         stress_index = (heart_rate * body_temp) / spo2
@@ -285,7 +294,7 @@ with tab1:
         readiness_score = max(0, int((1 - total_risk) * 100))
         is_fit = total_risk < alert_threshold
         
-        # Store results in Session State
+        # Store freshly computed results in Session State with IST timestamp
         st.session_state.test_results = {
             "biometric_risk": int(physical_fatigue_prob * 100),
             "visual_risk": int(visual_score * 100),
@@ -296,7 +305,7 @@ with tab1:
             "spo2": spo2,
             "temp": body_temp,
             "sleep": sleep_hours,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            "timestamp": get_ist_now_str()
         }
         st.session_state.test_submitted = True
         st.rerun()
@@ -319,7 +328,7 @@ with tab1:
                     <h2>✅ VERDICT: FIT FOR DUTY</h2>
                     <p><strong>Personnel:</strong> {user['full_name']} ({badge_id})</p>
                     <p><strong>Status:</strong> Operational parameters are within normal safety limits. Ready for active duty deployment.</p>
-                    <p><strong>Time:</strong> {res['timestamp']}</p>
+                    <p><strong>Assessed Time (IST):</strong> {res['timestamp']}</p>
                 </div>
             """, unsafe_allow_html=True)
         else:
@@ -328,36 +337,65 @@ with tab1:
                     <h2>🚨 VERDICT: UNFIT FOR DUTY</h2>
                     <p><strong>Personnel:</strong> {user['full_name']} ({badge_id})</p>
                     <p><strong>Status:</strong> High fatigue or biometric stress detected. Mandatory tactical rest enforced immediately.</p>
-                    <p><strong>Time:</strong> {res['timestamp']}</p>
+                    <p><strong>Assessed Time (IST):</strong> {res['timestamp']}</p>
                 </div>
             """, unsafe_allow_html=True)
             
         st.markdown("<br>", unsafe_allow_html=True)
         
-        if st.button("💾 Save Test Result to Database Record"):
-            log_health_data(badge_id, res['hr'], res['spo2'], res['temp'], res['sleep'], res['readiness_score'], res['status'])
-            st.success("Test record successfully saved to database!")
+        col_save, col_reset = st.columns([2, 1])
+        with col_save:
+            if st.button("💾 Save Test Result to Database Record"):
+                log_health_data(badge_id, res['hr'], res['spo2'], res['temp'], res['sleep'], res['readiness_score'], res['status'])
+                st.success("Test record successfully saved to database with IST timestamp!")
+        with col_reset:
+            if st.button("🔄 Clear & Retake Test"):
+                st.session_state.test_submitted = False
+                st.session_state.test_results = None
+                st.rerun()
 
 # --- TAB 2: MAP ---
 with tab2:
     st.subheader("Tactical Sector Location Map")
     st.caption(f"Sector Location assigned to unit: {user['unit']}")
     
-    unit_location = [34.1526, 77.5771]
+    # Preset Tactical Sectors across India / HQ
+    sector_coordinates = {
+        "14th Infantry Battalion": [28.6139, 77.2090],          # New Delhi HQ
+        "9th Para Special Forces": [32.7266, 74.8570],           # Jammu Sector
+        "4th Armored Division": [26.9124, 75.7873],              # Western Desert Sector
+        "Northern Command Signals": [32.9183, 75.1416],          # Udhampur Command
+        "High Altitude Warfare School (HAWS)": [34.1526, 77.5771] # Leh High Altitude
+    }
     
-    current_status = "FIT"
-    if st.session_state.test_results:
-        current_status = st.session_state.test_results["status"]
+    unit_loc = sector_coordinates.get(user['unit'], [28.6139, 77.2090])
+    
+    col_map_opts, col_map_disp = st.columns([1, 3])
+    
+    with col_map_opts:
+        st.markdown("#### Sector Map Options")
+        selected_sector = st.selectbox(
+            "Select Deployed Sector Zone",
+            list(sector_coordinates.keys()),
+            index=list(sector_coordinates.keys()).index(user['unit']) if user['unit'] in sector_coordinates else 0
+        )
+        unit_loc = sector_coordinates[selected_sector]
+        st.write(f"**Coordinates:** `{unit_loc[0]}° N, {unit_loc[1]}° E`")
+    
+    with col_map_disp:
+        current_status = "NOT ASSESSED"
+        if st.session_state.test_results:
+            current_status = st.session_state.test_results["status"]
+            
+        field_map = folium.Map(location=unit_loc, zoom_start=10)
+        folium.Marker(
+            unit_loc,
+            popup=f"Personnel: {user['full_name']}\nBadge: {badge_id}\nStatus: {current_status}",
+            tooltip=f"{user['full_name']} ({badge_id}) - {selected_sector}",
+            icon=folium.Icon(color="green" if current_status == "FIT FOR DUTY" else "red" if current_status == "UNFIT FOR DUTY" else "blue", icon="user", prefix="fa")
+        ).add_to(field_map)
         
-    field_map = folium.Map(location=unit_location, zoom_start=11)
-    folium.Marker(
-        unit_location,
-        popup=f"Personnel: {user['full_name']}\nBadge: {badge_id}\nStatus: {current_status}",
-        tooltip=f"{user['full_name']} ({badge_id})",
-        icon=folium.Icon(color="green" if current_status == "FIT FOR DUTY" else "red", icon="user", prefix="fa")
-    ).add_to(field_map)
-    
-    st_folium(field_map, width=950, height=420)
+        st_folium(field_map, width=700, height=420)
 
 # --- TAB 3: MEDICAL LOG HISTORY ---
 with tab3:
